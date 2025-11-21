@@ -1,0 +1,30 @@
+#!/bin/bash
+cd "$(dirname "$0")/.."
+
+TESTNAME="congestion_control"
+LOGDIR="logs/$TESTNAME"
+OUT="tests/received_${TESTNAME}.bin"
+
+echo "=== CONGESTION CONTROL TEST ==="
+
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+rm -f "$OUT" logs/*.log
+
+python3 prtp_receiver.py \
+  --bind-ip 127.0.0.1 --bind-port 9207 \
+  --out "$OUT" &
+RPID=$!
+
+sleep 0.2
+
+python3 prtp_sender.py \
+  --server-ip 127.0.0.1 --server-port 9207 \
+  --file test.bin --loss 0 --corrupt 0
+
+kill "$RPID" 2>/dev/null
+
+mv logs/sender.log "$LOGDIR/sender.log"
+mv logs/receiver.log "$LOGDIR/receiver.log"
+
+echo "[INFO] Inspect $LOGDIR/sender.log for cwnd behavior."
