@@ -5,6 +5,10 @@ cd "$ROOT"
 echo "=== RUNNING ALL PROTOCOL TESTS ==="
 chmod +x tests/*.sh
 
+pkill -f prtp_receiver.py 2>/dev/null
+pkill -f prtp_sender.py 2>/dev/null
+sleep 0.1
+
 tests/test_handshake.sh
 tests/test_basic_transfer.sh
 tests/test_low_loss.sh

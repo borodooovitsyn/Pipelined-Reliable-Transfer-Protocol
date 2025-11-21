@@ -1,6 +1,10 @@
 #!/bin/bash
 cd "$(dirname "$0")/.."
 
+pkill -f prtp_receiver.py 2>/dev/null
+pkill -f prtp_sender.py 2>/dev/null
+sleep 0.1
+
 TESTNAME="long_file"
 LOGDIR="logs/$TESTNAME"
 OUT="tests/received_${TESTNAME}.bin"
