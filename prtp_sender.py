@@ -1,34 +1,48 @@
 import socket
 import argparse
 import time
+import os
+
 from prtp_packet import make_packet, parse_packet, FLAG_SYN, FLAG_ACK, FLAG_FIN
 from prtp_channel import unreliable_send
 
 MSS = 1000
 RTO = 0.5
 
+os.makedirs("logs", exist_ok=True)
+
+def log_sender(msg):
+    with open("logs/sender.log", "a") as f:
+        f.write(f"{time.time():.6f} [SENDER] {msg}\n")
+
+
 def client_handshake(sock, server_addr):
     sock.settimeout(1.0)
     client_isn = 0
     syn_pkt = make_packet(client_isn, 0, 0, FLAG_SYN, b"")
     server_isn = None
+    log_sender("Sending SYN")
     while True:
         sock.sendto(syn_pkt, server_addr)
         try:
             data, addr = sock.recvfrom(4096)
         except socket.timeout:
+            log_sender("Timeout waiting for SYN/ACK → retrying SYN")
             continue
         parsed = parse_packet(data)
         if not parsed:
             continue
         seq, ack, wnd, flags, payload, corrupted = parsed
         if corrupted:
+            log_sender("Corrupted SYN/ACK received → ignoring")
             continue
         if flags & FLAG_SYN and flags & FLAG_ACK and ack == client_isn + 1:
+            log_sender("Received valid SYN/ACK → handshake complete")
             server_isn = seq
             break
     ack_pkt = make_packet(client_isn + 1, server_isn + 1, 0, FLAG_ACK, b"")
     sock.sendto(ack_pkt, server_addr)
+    log_sender("Sent final ACK of handshake")
     sock.settimeout(None)
     return client_isn + 1
 
@@ -59,6 +73,7 @@ def send_file(sock, server_addr, filename, start_seq, loss_prob, corrupt_prob):
     unacked = {}
     timer_start = None
     sock.settimeout(0.05)
+    log_sender(f"Begin sending file: {num_segments} segments")
     while last_acked < final_seq:
         send_window = int(min(cwnd, remote_rwnd))
         if send_window < 1:
@@ -68,6 +83,7 @@ def send_file(sock, server_addr, filename, start_seq, loss_prob, corrupt_prob):
             payload = segments[idx]
             pkt = make_packet(next_seq, 0, 0, 0, payload)
             unreliable_send(sock, pkt, server_addr, loss_prob, corrupt_prob)
+            log_sender(f"SEND seq={next_seq} cwnd={cwnd:.2f} base={send_base}")
             now = time.time()
             unacked[next_seq] = (pkt, now)
             if send_base == next_seq:
@@ -80,10 +96,12 @@ def send_file(sock, server_addr, filename, start_seq, loss_prob, corrupt_prob):
                 continue
             seq, ack, wnd, flags, payload, corrupted = parsed
             if corrupted:
+                log_sender("Corrupted ACK received → ignored")
                 continue
             if not (flags & FLAG_ACK):
                 continue
             ack_num = ack
+            log_sender(f"ACK received ack={ack_num} cwnd={cwnd:.2f} base={send_base}")
             if wnd >= 0:
                 remote_rwnd = wnd
             if ack_num > last_acked:
@@ -109,19 +127,23 @@ def send_file(sock, server_addr, filename, start_seq, loss_prob, corrupt_prob):
         if unacked and timer_start is not None:
             now = time.time()
             if now - timer_start >= RTO:
+                log_sender(f"TIMEOUT at base={send_base} → cwnd reset, ssthresh={ssthresh}")
                 ssthresh = max(cwnd / 2.0, 1.0)
                 cwnd = 1.0
                 ack_count = 0.0
                 for s in sorted(unacked):
+                    log_sender(f"RETX seq={s}")
                     pkt, _ = unacked[s]
                     unreliable_send(sock, pkt, server_addr, loss_prob, corrupt_prob)
                     unacked[s] = (pkt, time.time())
                 timer_start = time.time()
+    log_sender("File transfer complete")
     return final_seq + 1
 
 def teardown(sock, server_addr, seq_for_fin, loss_prob, corrupt_prob):
     fin_pkt = make_packet(seq_for_fin, 0, 0, FLAG_FIN, b"")
     sock.settimeout(1.0)
+    log_sender("Sending FIN")
     attempts = 0
     while attempts < 3:
         unreliable_send(sock, fin_pkt, server_addr, loss_prob, corrupt_prob)
@@ -129,6 +151,7 @@ def teardown(sock, server_addr, seq_for_fin, loss_prob, corrupt_prob):
         try:
             data, addr = sock.recvfrom(4096)
         except socket.timeout:
+            log_sender("Timeout waiting for FIN/ACK → retrying")
             continue
         parsed = parse_packet(data)
         if not parsed:
@@ -137,6 +160,7 @@ def teardown(sock, server_addr, seq_for_fin, loss_prob, corrupt_prob):
         if corrupted:
             continue
         if flags & FLAG_ACK and flags & FLAG_FIN:
+            log_sender("FIN/ACK received → connection closed")
             break
     sock.settimeout(None)
 
@@ -148,6 +172,9 @@ def main():
     parser.add_argument("--loss", type=float, default=0.1)
     parser.add_argument("--corrupt", type=float, default=0.05)
     args = parser.parse_args()
+
+    open("logs/sender.log", "w").close()
+    
     addr = (args.server_ip, args.server_port)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     start_seq = client_handshake(sock, addr)
