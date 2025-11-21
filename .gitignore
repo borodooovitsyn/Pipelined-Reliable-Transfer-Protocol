@@ -209,3 +209,7 @@ __marimo__/
 .idea
 
 logs/
+
+*.bin
+tests/*.bin
+tests/received_*.bin
