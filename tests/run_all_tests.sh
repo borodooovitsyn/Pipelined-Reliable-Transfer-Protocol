@@ -20,4 +20,4 @@ tests/test_flow_control.sh
 tests/test_long_file.sh
 tests/test_fairness.sh
 
-echo "=== ALL TESTS COMPLETED ==="
+echo "== ALL TESTS COMPLETED ==="
